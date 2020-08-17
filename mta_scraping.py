@@ -78,7 +78,7 @@ def bring_it_on(n=1,main_url='https://www.maccabi-tlv.co.il/en/result-fixtures/f
 
         df_gen = gen_id_map['date'].str.split(" ", n = 2, expand = True)
 
-        df_gen = df_gen.rename(columns={0: 'day', 1: 'name',2:'year'})
+        df_gen = df_gen
 
         month_map = pd.DataFrame({'name':['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'],
                  'number':['01','02','03','04','05','06','07','08','09','10','11','12']})
@@ -111,13 +111,12 @@ def bring_it_on(n=1,main_url='https://www.maccabi-tlv.co.il/en/result-fixtures/f
 
     #####################################################
 
-
     ### Get Relevant Links from a seson page
 
     def game_id_table(page_url = 'https://www.maccabi-tlv.co.il/en/result-fixtures/first-team/results/'):
         #setup
         r_mta = requests.get(page_url)
-        c_mta = r_mta.content
+        c_mta = r_mta
         soup_mta=BeautifulSoup(c_mta,"html.parser")
 
         #all game links from geven url
@@ -174,6 +173,7 @@ def bring_it_on(n=1,main_url='https://www.maccabi-tlv.co.il/en/result-fixtures/f
     mta_game_id_url = game_id_table('https://www.maccabi-tlv.co.il/en/result-fixtures/first-team/results/')
 
     def get_players_data(url):
+
         r_mta_2 = requests.get(url)
         c_mta_2 = r_mta_2.content
         soup_mta_2 = BeautifulSoup(c_mta_2,"html.parser")
@@ -220,7 +220,8 @@ def bring_it_on(n=1,main_url='https://www.maccabi-tlv.co.il/en/result-fixtures/f
 
         names = soup_mta_2.find_all("div",{"class":"p50 yellow"})
 
-        def player_name(i,string):
+        def player_name(i, string):
+
             t = string.find_all("li")[i].text
             name_indicators = []
             index = 0
@@ -490,12 +491,11 @@ def mta_lego(main_list):
     except Exception as ex:
         print(ex)
 
-    #conn = psycopg2.connect("dbname = 'mta_prod' user = 'postgres' password = 'Fcm180111' host = 'localhost' port = '5434'")
     conn = psycopg2.connect("dbname = 'd5m2p6kka0vf8d' user = 'fzgxltqkgmaklf' password = '6ad610f8f95f1f570ad6c846b68e74f0d692386a8e43d2fce5976f1718e2b779' host = 'ec2-184-73-232-93.compute-1.amazonaws.com' port = '5432'")
     dst_g_cursor = conn.cursor()
     dst_p_cursor = conn.cursor()
 
-        # update carlin relevant table
+
     try:
         values_list_g = [tuple(x) for x in games.values]
         execute_values(dst_g_cursor,
@@ -576,8 +576,10 @@ def mta_lego(main_list):
         conn.commit()
         dst_e_cursor.close()
         print('events_db_ok')
+
     except Exception as ex:
         print(ex)
+
     conn.close()
 
 def mta_scrap_insert():
