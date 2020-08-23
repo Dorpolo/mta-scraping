@@ -6,12 +6,14 @@ import pandas as pd
 import datetime
 import psycopg2
 from psycopg2.extras import execute_values
+from tabulate import tabulate
+
 
 class ScrapMta:
 
-    def __init__(self, my_url='https://www.maccabi-tlv.co.il/en/result-fixtures/first-team/results/', n = 5):
-        """
+    def __init__(self, my_url='https://www.maccabi-tlv.co.il/en/result-fixtures/first-team/results/', n=5):
 
+        """
         :param my_url: season results page
         :param n: number of games, if the required output is only
                   fetching the last game, so the 5  default value is enough
@@ -35,10 +37,10 @@ class ScrapMta:
         self.soup_mta = BeautifulSoup(requests.get(my_url).content, "html.parser")
 
         # get all links from page_url
-        game_links = [link.get('href') for link in self.soup_mta.find_all('a')]
+        self.game_links = [link.get('href') for link in self.soup_mta.find_all('a')]
 
         # choose only relevant urls (might be changed)
-        self.relevant_links = [item for item in game_links if
+        self.relevant_links = [item for item in self.game_links if
                                ('https://www.maccabi-tlv.co.il/en/match/' in item) &
                                ('overview/' not in item)][0:(self.n+1)]
 
@@ -56,7 +58,7 @@ class ScrapMta:
         df_not_mta_res = [item.text for item in not_mta_result]
 
         # opponent name
-        not_mta_teams = self.soup_mta.find_all("div",{"class":"holder notmaccabi nn"})
+        not_mta_teams = self.soup_mta.find_all("div",{"class": "holder notmaccabi nn"})
         df_not_mta_teams = [item.text for item in not_mta_teams]
 
         # stadium, date
@@ -83,8 +85,7 @@ class ScrapMta:
                                                                                      2: 'year'})
 
         months = [(datetime.date(2020, i, 1).strftime('%m')[:3],
-                   datetime.date(2020, i, 1).strftime('%B')[:3])
-                  for i in range(1, 13)]
+                   datetime.date(2020, i, 1).strftime('%B')[:3]) for i in range(1, 13)]
 
         month_map = pd.DataFrame(months).rename(columns={0: 'number', 1: 'name'})
 
@@ -121,8 +122,8 @@ class ScrapMta:
             :param url:
             :return: game_id
             """
-            soup_mta_2 = BeautifulSoup(requests.get(url + 'teams').content,"html.parser")
-            game_id_date_text = soup_mta_2.find_all("header", {"class":"entry-header"})[0]\
+            soup_mta_2 = BeautifulSoup(requests.get(url + 'teams').content, "html.parser")
+            game_id_date_text = soup_mta_2.find_all("header", {"class": "entry-header"})[0]\
                 .text.replace('\n', '').replace('\t', '')
             loc_date_text = game_id_date_text.find(" ", 2)
             date_final = game_id_date_text[loc_date_text + 1:loc_date_text + 11]
@@ -154,7 +155,7 @@ class ScrapMta:
         df_game_connection['date'] = df_game_connection['game_id'].str[0:8]
         df_game_connection['relevant_link'] = df_game_connection["date"].str.isdigit()
 
-        return df_game_connection.loc[df_game_connection['relevant_link'] == True].reset_index()
+        return df_game_connection.loc[df_game_connection['relevant_link']].reset_index()
 
     def get_players_data(self, url):
         """
@@ -303,6 +304,9 @@ class ScrapMta:
             )
 
         players_df['is_played'] = np.where(players_df.minute_played > 0, True, False)
+        # special treatment for M. Baltaxa
+        players_df['player_name'] = np.where((players_df.player_name == 'NA') &
+                                             (players_df.player_number == 3), 'Matan Baltaxa', players_df.player_name)
 
         return players_df
 
@@ -434,6 +438,7 @@ class ScrapMta:
             return my_new_df
 
         def lego_events(list):
+
             mta_events = list[5]
             mta_events['event_id'] = mta_events['game_id'].str[0:8] + '_' + \
                                      mta_events['value'].astype(str).str[0:3] + '_' + \
@@ -447,17 +452,14 @@ class ScrapMta:
 
         try:
             m_games = lego_game(main_list)
-            print('games_ok')
         except Exception as ex:
             print(ex)
         try:
             m_players = lego_players(main_list)
-            print('players_ok')
         except Exception as ex:
             print(ex)
         try:
             m_events = lego_events(main_list)
-            print('events_ok')
         except Exception as ex:
             print(ex)
 
@@ -466,11 +468,117 @@ class ScrapMta:
         return df_list
 
 
+class MtaEvents:
+
+    def __init__(self, game_id):
+
+        self.gameId = game_id
+        self.conn = psycopg2.connect("host = ec2-184-73-232-93.compute-1.amazonaws.com \
+                                      port = 5432 \
+                                      dbname = d5m2p6kka0vf8d \
+                                      user = fzgxltqkgmaklf \
+                                      password = 6ad610f8f95f1f570ad6c846b68e74f0d692386a8e43d2fce5976f1718e2b779")
+
+    def fetch_game_events(self):
+
+        """
+        :url: game_url
+        :return: events_data_frame
+        """
+
+        games = pd.read_sql("""SELECT DISTINCT c.player_name,
+                                               'confirmed' as status,
+                                               g.game_url,
+                                               g.game_id,
+                                               g.date,
+                                               g.season
+                               FROM mta_player_con c 
+                               INNER JOIN mta_games g ON (g.game_id = c.game_id) 
+                               WHERE c.game_id = '{g_id}'
+                               ORDER BY 1 DESC""".format(g_id=self.gameId),
+                            self.conn)
+
+        url = games.game_url[0]
+
+        if '/teams/' in url:
+            url = url.replace('/teams/', '')
+        else:
+            url = url.replace('/teams', '')
+
+        val_game_id = self.gameId
+        val_game_date = games['date'][0]
+
+        r_mta = requests.get(url)
+        c_mta = r_mta.content
+        soup_mta = BeautifulSoup(c_mta, "html.parser")
+
+        dt = soup_mta.find_all("div", {'class': 'play-by-play-homepage'})
+
+        minutes = [item.text for item in dt[0].find_all("div", {'class': 'min'})]
+        events = [item.text.replace('\t', '').replace('\n', '') for item in dt[0].find_all("p")]
+
+        df_init = pd.DataFrame({'minute': minutes, 'event_name': events})
+
+        df_init['assist'] = df_init['event_name'].str.contains('Assist')
+        df_init['goal_scored'] = df_init['event_name'].str.contains('Goal')
+        df_init['yellow_card'] = df_init['event_name'].str.contains('Yellow')
+        df_init['red_card'] = df_init['event_name'].str.contains('Red')
+        df_init['con'] = df_init['event_name'].str.replace('Yellow', '')
+        df_init['con'] = df_init['con'].str.replace(' to', '')
+        df_init['con'] = df_init['con'].str.replace('card ', '')
+        df_init['con'] = df_init['con'].str.replace('by ', '')
+        df_init['con'] = df_init['con'].str.replace('scored ', '')
+        df_init['con'] = df_init['con'].str.replace('Goal ', '')
+        df_init['con'] = df_init['con'].str.replace('player ', '')
+        df_init['con'] = df_init['con'].str.replace('Assist ', '')
+        df_init['con'] = df_init['con'].str.replace('red ', '')
+
+        df_init_filtered = df_init.loc[((df_init.assist == True) | (df_init.goal_scored == True) |
+                                        (df_init.yellow_card == True) | (df_init.red_card == True)) & (
+                                       (df_init.con != ''))]
+
+        df2 = df_init_filtered[['minute', 'event_name', 'con', 'assist', 'goal_scored', 'yellow_card', 'red_card']].\
+            rename(columns={'con': 'player_name'})
+
+        df2['date'] = val_game_date
+        df2['game_id'] = val_game_id
+
+        df_melted = df2.melt(id_vars=['game_id', 'date', 'event_name', 'player_name', 'minute'], var_name='event_type')
+        df_melted = df_melted.loc[df_melted.value]
+        df_melted['player_name'] = df_melted['player_name'].str.replace('  ', '')
+
+        df_melted.player_name = np.where(df_melted.player_name.str[0] == " ",
+                                         df_melted.player_name.str.replace(' ', '', 1),
+                                         df_melted.player_name)
+
+        df_melted['player_name'] = df_melted.player_name.str.replace("Penalty", '', 1)
+        df_melted['player_name'] = df_melted.player_name.str.replace("(", '', 1)
+        df_melted['player_name'] = df_melted.player_name.str.replace(")", '', 1)
+        df_melted['player_name'] = df_melted.player_name.str.replace("  ", '', 1)
+        df_melted['player_name'] = df_melted['player_name'].str.replace(r"([A-Z])", r" \1")
+        df_melted['player_name'] = df_melted['player_name'].str.replace("  ", " ")
+        df_melted['player_name'] = df_melted['player_name'].apply(lambda x: x[1:] if x.startswith(" ") else x)
+        df_melted['player_name'] = df_melted['player_name'].apply(lambda x: x[:-1] if x.endswith(" ") else x)
+
+        data = pd.merge(df_melted,
+                        games[['player_name', 'status']],
+                        on='player_name',
+                        how='left')
+
+        output = data.loc[data.status == 'confirmed'].sort_values(by='player_name')
+
+        return output[['game_id', 'date', 'minute', 'event_type', 'player_name', 'event_name']]
+
+
 if __name__ == '__main__':
 
-    Mta = ScrapMta(my_url='https://www.maccabi-tlv.co.il/en/result-fixtures/first-team/results/')
+    Mta = ScrapMta(my_url='https://www.maccabi-tlv.co.il/en/result-fixtures/first-team/results/',n=10)
 
-    i = 1
+    # config the i parameter in order to get its location in the ordered date list
+    # e.g: i == 0 -> the scraped data will be related to the recent match
+    #      i == 1 -> the scraped data will be related to the previous match
+
+    i = 0
 
     # get all Maccabi games (per season page)
     mta_df = Mta.mta_results()
@@ -535,10 +643,10 @@ if __name__ == '__main__':
                               game_url = excluded.game_url,
                           game_type = excluded.game_type""",
                        values_list_g)
-        print(values_list_g)
         conn.commit()
         dst_g_cursor.close()
-        print('games_db_ok')
+        print(tabulate(games, headers='keys', tablefmt='psql'))
+
     except Exception as ex:
         print(ex)
 
@@ -560,6 +668,7 @@ if __name__ == '__main__':
                                minutes_played = excluded.minutes_played""",
                        values_list_p)
         conn.commit()
+        print(tabulate(players, headers='keys', tablefmt='psql'))
         dst_p_cursor.close()
         print('players_db_ok')
 
@@ -568,7 +677,9 @@ if __name__ == '__main__':
 
     try:
         dst_e_cursor = conn.cursor()
+
         values_list_e = [tuple(x) for x in events.values]
+
         execute_values(dst_e_cursor,
                        """INSERT INTO "mta_events" (event_id, date, game_id,
                                                  player_name, event_type, minute)
@@ -580,15 +691,62 @@ if __name__ == '__main__':
                                player_name = excluded.player_name,
                                event_type = excluded.event_type""",
                        values_list_e)
-        print(values_list_e)
         conn.commit()
+        print(tabulate(events, headers='keys', tablefmt='psql'))
         dst_e_cursor.close()
-        print('events_db_ok')
 
     except Exception as ex:
         print(ex)
 
     conn.close()
 
-    print('DONE')
+    print('Task 1 (Update mta_games, mta_player_con, mta_events) -- DONE')
+
+    conn = psycopg2.connect("host = ec2-184-73-232-93.compute-1.amazonaws.com \
+                               port = 5432 \
+                               dbname = d5m2p6kka0vf8d \
+                               user = fzgxltqkgmaklf \
+                               password = 6ad610f8f95f1f570ad6c846b68e74f0d692386a8e43d2fce5976f1718e2b779")
+
+    # getting the game id
+    gid = pd.read_sql("""SELECT game_id 
+                         FROM mta_games
+                         ORDER BY date DESC
+                         LIMIT 1;""", conn)['game_id']
+
+    for row in gid:
+
+        p_names = pd.read_sql("""SELECT distinct player_name FROM mta_player_con""", conn)
+
+        Events = MtaEvents(row)
+        df = Events.fetch_game_events()
+
+        df = df.loc[df.player_name.isin(p_names.player_name)]
+
+        print(str(i) + ' --> ' + row)
+
+        if df.shape[0] > 0:
+
+            try:
+                cur = conn.cursor()
+                values = [tuple(x) for x in df.values]
+
+                execute_values(cur,
+                               """INSERT INTO events (game_id, date, minute, event_type, player_name, event_name)
+                                   VALUES %s
+                                   ON CONFLICT ON CONSTRAINT events_pkey
+                                   DO UPDATE
+                                   SET event_name = excluded.event_name""",
+                               values)
+
+                conn.commit()
+                cur.close()
+
+                print(tabulate(df[['game_id', 'date', 'player_name', 'event_type', 'minute']], headers='keys', tablefmt='psql'))
+
+            except Exception as ex:
+                print(ex)
+
+        conn.close()
+        i += 1
 
